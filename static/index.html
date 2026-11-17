@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="utf-8">
+    <title>ACI Developer Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { darkMode: 'class', theme: { extend: { colors: { slate: { 850: '#1e293b', 900: '#0f172a' } } } } }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-300 font-sans antialiased min-h-screen p-8">
+    <div class="max-w-5xl mx-auto space-y-8">
+        
+        <!-- Header -->
+        <header class="flex justify-between items-center border-b border-slate-800 pb-6">
+            <div>
+                <h1 class="text-3xl font-bold text-white tracking-tight">Agent control centre</h1>
+                <p class="text-sm text-slate-400 mt-1">Manage spending mandates, monitor decisions and control agent authority.</p>
+            </div>
+            <div class="flex items-center gap-2 text-xs font-medium text-emerald-400 bg-emerald-400/10 px-3 py-1.5 rounded-full border border-emerald-400/20">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> API Connected
+            </div>
+        </header>
+
+        <!-- Stats -->
+        <div class="grid grid-cols-3 gap-4">
+            <div class="bg-slate-850 p-5 rounded-xl border border-slate-800">
+                <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Registered Agents</div>
+                <div class="text-2xl font-bold text-white mt-2" id="statAgents">0</div>
+            </div>
+            <div class="bg-slate-850 p-5 rounded-xl border border-slate-800">
+                <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Allocated Budget</div>
+                <div class="text-2xl font-bold text-white mt-2" id="statBudget">£0.00</div>
+            </div>
+            <div class="bg-slate-850 p-5 rounded-xl border border-slate-800">
+                <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Recorded Decisions</div>
+                <div class="text-2xl font-bold text-white mt-2" id="statDecisions">0</div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-6">
+            <!-- Create Agent -->
+            <div class="bg-slate-850 rounded-xl border border-slate-800 p-6">
+                <h2 class="text-lg font-semibold text-white mb-1">Create an agent</h2>
+                <p class="text-xs text-slate-400 mb-6">Define exactly what this agent is permitted to spend.</p>
+                
+                <form id="agentForm" class="space-y-4">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Agent name</label>
+                        <input type="text" id="name" placeholder="e.g. Procurement Agent" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" required>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-400 mb-1">Max transaction (£)</label>
+                            <input type="number" step="any" id="max_tx" value="500" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" required>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-slate-400 mb-1">Monthly budget (£)</label>
+                            <input type="number" step="any" id="monthly_limit" value="2000" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" required>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Allowed merchants (comma separated)</label>
+                        <input type="text" id="merchants" value="amazon.co.uk, viking-direct.co.uk" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" required>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Allowed categories</label>
+                        <input type="text" id="categories" value="toner, office_supplies" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" required>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Require approval over (£)</label>
+                        <input type="number" step="any" id="approval" value="100" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" required>
+                    </div>
+                    
+                    <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-2 rounded-lg text-sm transition-colors mt-2">
+                        Generate API Key
+                    </button>
+                </form>
+
+                <div id="newAgentResult" class="hidden mt-4 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+                    <p class="text-xs text-emerald-400 font-semibold mb-2">Agent Created. Copy this key now.</p>
+                    <div id="newApiKey" class="bg-slate-900 p-2 rounded text-xs font-mono text-emerald-300 break-all border border-slate-700"></div>
+                </div>
+            </div>
+
+            <!-- Active Agents -->
+            <div class="bg-slate-850 rounded-xl border border-slate-800 p-6 flex flex-col">
+                <div class="flex justify-between items-start mb-6">
+                    <div>
+                        <h2 class="text-lg font-semibold text-white mb-1">Your agents</h2>
+                        <p class="text-xs text-slate-400">Monitor allocated budgets and control authority.</p>
+                    </div>
+                    <button onclick="fetchData()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700">Refresh</button>
+                </div>
+                
+                <div id="agentList" class="space-y-4 overflow-y-auto max-h-[400px] pr-2">
+                    <!-- Agent cards get injected here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Ledger (Collapsible) -->
+        <div class="bg-slate-850 rounded-xl border border-slate-800 p-6">
+            <div class="flex justify-between items-center cursor-pointer" onclick="toggleLedger()">
+                <div>
+                    <h2 class="text-lg font-semibold text-white mb-1 flex items-center gap-2">
+                        Transaction ledger
+                        <svg class="w-4 h-4 text-slate-500 transition-transform duration-200" id="ledgerChevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </h2>
+                    <p class="text-xs text-slate-400">Click to expand or hide authorization attempts.</p>
+                </div>
+                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-900 px-2 py-1 rounded border border-slate-800">Live Database Records</div>
+            </div>
+            
+            <div id="ledgerContainer" class="hidden mt-6">
+                <table class="w-full text-sm text-left">
+                    <thead class="text-xs text-slate-500 uppercase bg-slate-900/50">
+                        <tr>
+                            <th class="px-4 py-3 font-medium rounded-tl-lg">Amount</th>
+                            <th class="px-4 py-3 font-medium">Merchant</th>
+                            <th class="px-4 py-3 font-medium">Category</th>
+                            <th class="px-4 py-3 font-medium">Decision</th>
+                            <th class="px-4 py-3 font-medium">Reason</th>
+                            <th class="px-4 py-3 font-medium rounded-tr-lg">Timestamp</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ledgerBody" class="divide-y divide-slate-800/50">
+                        <tr><td colspan="6" class="text-center py-6 text-slate-500">No authorization requests recorded yet.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // Toggle Ledger visibility
+        function toggleLedger() {
+            const container = document.getElementById("ledgerContainer");
+            const chevron = document.getElementById("ledgerChevron");
+            container.classList.toggle("hidden");
+            chevron.classList.toggle("rotate-180");
+        }
+
+        async function fetchData() {
+            // Fetch Agents
+            const agentsRes = await fetch(`/api/agents`);
+            const agents = await agentsRes.json();
+            const list = document.getElementById("agentList");
+            
+            // Update Stats
+            document.getElementById("statAgents").innerText = agents.length;
+            const totalBudget = agents.reduce((acc, curr) => acc + curr.monthly_limit, 0);
+            document.getElementById("statBudget").innerText = `£${totalBudget.toFixed(2)}`;
+
+            if (agents.length === 0) {
+                list.innerHTML = `<div class="text-center py-10 border border-dashed border-slate-700 rounded-xl"><p class="text-slate-500 text-sm">No agents yet</p></div>`;
+            } else {
+                list.innerHTML = agents.map(a => {
+                    const spentPct = Math.min((a.spend_this_month / a.monthly_limit) * 100, 100);
+                    const isFrozen = a.is_frozen;
+                    return `
+                    <div class="bg-slate-900 border border-slate-700 p-4 rounded-xl">
+                        <div class="flex justify-between items-start mb-2">
+                            <div>
+                                <h3 class="font-semibold text-white text-sm">${a.name}</h3>
+                                <span class="text-[10px] text-slate-500 font-mono">${a.id}</span>
+                            </div>
+                            <span class="text-[10px] font-bold px-2 py-1 rounded-full ${isFrozen ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}">
+                                ${isFrozen ? 'FROZEN' : 'ACTIVE'}
+                            </span>
+                        </div>
+                        
+                        <div class="space-y-1 mb-4">
+                            <div class="flex justify-between text-xs">
+                                <span class="text-slate-400">Spent</span>
+                                <span class="text-white font-medium">£${a.spend_this_month.toFixed(2)} <span class="text-slate-500">/ £${a.monthly_limit.toFixed(2)}</span></span>
+                            </div>
+                            <div class="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                                <div class="h-full ${spentPct > 90 ? 'bg-rose-500' : 'bg-blue-500'}" style="width: ${spentPct}%"></div>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-3 gap-2 mt-4 pt-4 border-t border-slate-800">
+                            <button onclick="runTest('${a.id}')" class="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-xs py-1.5 rounded transition-colors">Run £85 Test</button>
+                            <button onclick="toggleFreeze('${a.id}')" class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs py-1.5 rounded transition-colors">${isFrozen ? 'Unfreeze' : 'Freeze'}</button>
+                            <button onclick="deleteAgent('${a.id}')" class="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs py-1.5 rounded transition-colors">Delete</button>
+                        </div>
+                    </div>
+                `}).join('');
+            }
+
+            // Fetch Ledger
+            const ledgerRes = await fetch(`/api/ledger`);
+            const ledger = await ledgerRes.json();
+            const tbody = document.getElementById("ledgerBody");
+            
+            document.getElementById("statDecisions").innerText = ledger.length;
+
+            if (ledger.length > 0) {
+                tbody.innerHTML = ledger.map(l => `
+                    <tr class="hover:bg-slate-800/50 transition-colors">
+                        <td class="px-4 py-3 text-white font-medium">£${l.amount.toFixed(2)}</td>
+                        <td class="px-4 py-3">${l.merchant}</td>
+                        <td class="px-4 py-3 text-slate-500">${l.category}</td>
+                        <td class="px-4 py-3">
+                            <span class="text-[10px] font-bold px-2 py-1 rounded-full border ${l.decision === 'ALLOW' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}">
+                                ${l.decision}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 text-xs text-slate-400">${l.reason.replace(/_/g, ' ')}</td>
+                        <td class="px-4 py-3 text-xs text-slate-500">Just now</td>
+                    </tr>
+                `).join('');
+            } else {
+                tbody.innerHTML = `<tr><td colspan="6" class="text-center py-6 text-slate-500">No authorization requests recorded yet.</td></tr>`;
+            }
+        }
+
+        async function runTest(id) {
+            await fetch(`/api/agents/${id}/test`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ amount: 85.00, merchant: "amazon.co.uk", category: "toner" })
+            });
+            fetchData();
+            // Auto-open ledger if it's hidden so user sees the result
+            if(document.getElementById("ledgerContainer").classList.contains("hidden")) {
+                toggleLedger();
+            }
+        }
+
+        async function toggleFreeze(id) {
+            await fetch(`/api/agents/${id}/freeze`, { method: "POST" });
+            fetchData();
+        }
+
+        async function deleteAgent(id) {
+            if(confirm("Delete this agent?")) {
+                await fetch(`/api/agents/${id}`, { method: "DELETE" });
+                fetchData();
+            }
+        }
+
+        document.getElementById("agentForm").addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const payload = {
+                name: document.getElementById("name").value,
+                max_transaction: parseFloat(document.getElementById("max_tx").value),
+                monthly_limit: parseFloat(document.getElementById("monthly_limit").value),
+                allowed_merchants: document.getElementById("merchants").value.split(',').map(s => s.trim()),
+                allowed_categories: document.getElementById("categories").value.split(',').map(s => s.trim()),
+                require_approval_over: parseFloat(document.getElementById("approval").value)
+            };
+
+            const res = await fetch(`/api/agents`, {
+                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                document.getElementById("newAgentResult").classList.remove("hidden");
+                document.getElementById("newApiKey").innerText = data.api_key;
+                fetchData();
+            }
+        });
+
+        fetchData();
+    </script>
+</body>
+</html>
