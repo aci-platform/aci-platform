@@ -2,28 +2,37 @@
 <html lang="en" class="dark">
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>ACI Developer Platform</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = { darkMode: 'class', theme: { extend: { colors: { slate: { 850: '#1e293b', 900: '#0f172a' } } } } }
     </script>
 </head>
-<body class="bg-slate-900 text-slate-300 font-sans antialiased min-h-screen p-8">
+<body class="bg-slate-900 text-slate-300 font-sans antialiased min-h-screen p-4 md:p-8">
     <div class="max-w-5xl mx-auto space-y-8">
-        
+
+        <!-- Sandbox banner -->
+        <div class="text-xs text-amber-300 bg-amber-400/10 border border-amber-400/20 rounded-lg px-4 py-2">
+            <strong>Sandbox environment.</strong> Cards issued here are mock cards with no real funds. Data may be reset at any time.
+        </div>
+
         <!-- Header -->
         <header class="flex justify-between items-center border-b border-slate-800 pb-6">
             <div>
                 <h1 class="text-3xl font-bold text-white tracking-tight">Agent control centre</h1>
                 <p class="text-sm text-slate-400 mt-1">Manage spending mandates, monitor decisions and control agent authority.</p>
             </div>
-            <div class="flex items-center gap-2 text-xs font-medium text-emerald-400 bg-emerald-400/10 px-3 py-1.5 rounded-full border border-emerald-400/20">
-                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> API Connected
+            <div id="apiStatus" class="flex items-center gap-2 text-xs font-medium text-slate-400 bg-slate-400/10 px-3 py-1.5 rounded-full border border-slate-400/20">
+                <span class="w-2 h-2 rounded-full bg-slate-400"></span> Checking…
             </div>
         </header>
 
+        <!-- Toast -->
+        <div id="toast" class="hidden fixed bottom-6 right-6 max-w-sm bg-slate-850 border border-slate-700 text-sm text-white px-4 py-3 rounded-lg shadow-xl z-50"></div>
+
         <!-- Stats -->
-        <div class="grid grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div class="bg-slate-850 p-5 rounded-xl border border-slate-800">
                 <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Registered Agents</div>
                 <div class="text-2xl font-bold text-white mt-2" id="statAgents">0</div>
@@ -33,30 +42,37 @@
                 <div class="text-2xl font-bold text-white mt-2" id="statBudget">£0.00</div>
             </div>
             <div class="bg-slate-850 p-5 rounded-xl border border-slate-800">
-                <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Recorded Decisions</div>
-                <div class="text-2xl font-bold text-white mt-2" id="statDecisions">0</div>
+                <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Pending Approvals</div>
+                <div class="text-2xl font-bold text-white mt-2" id="statPending">0</div>
             </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-6">
+        <!-- Pending reviews -->
+        <div id="reviewsPanel" class="hidden bg-slate-850 rounded-xl border border-amber-400/30 p-6">
+            <h2 class="text-lg font-semibold text-white mb-1">Awaiting your approval</h2>
+            <p class="text-xs text-slate-400 mb-4">These purchases exceeded the agent's approval threshold. Approve to let the agent claim a single-use card.</p>
+            <div id="reviewList" class="space-y-3"></div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <!-- Create Agent -->
             <div class="bg-slate-850 rounded-xl border border-slate-800 p-6">
                 <h2 class="text-lg font-semibold text-white mb-1">Create an agent</h2>
                 <p class="text-xs text-slate-400 mb-6">Define exactly what this agent is permitted to spend.</p>
-                
+
                 <form id="agentForm" class="space-y-4">
                     <div>
                         <label class="block text-xs font-medium text-slate-400 mb-1">Agent name</label>
-                        <input type="text" id="name" placeholder="e.g. Procurement Agent" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" required>
+                        <input type="text" id="name" maxlength="100" placeholder="e.g. Procurement Agent" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" required>
                     </div>
                     <div class="grid grid-cols-2 gap-4">
                         <div>
                             <label class="block text-xs font-medium text-slate-400 mb-1">Max transaction (£)</label>
-                            <input type="number" step="any" id="max_tx" value="500" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" required>
+                            <input type="number" step="any" min="0.01" id="max_tx" value="500" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" required>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-slate-400 mb-1">Monthly budget (£)</label>
-                            <input type="number" step="any" id="monthly_limit" value="2000" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" required>
+                            <input type="number" step="any" min="0.01" id="monthly_limit" value="2000" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" required>
                         </div>
                     </div>
                     <div>
@@ -69,17 +85,18 @@
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-slate-400 mb-1">Require approval over (£)</label>
-                        <input type="number" step="any" id="approval" value="100" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" required>
+                        <input type="number" step="any" min="0" id="approval" value="100" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" required>
                     </div>
-                    
+
                     <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-2 rounded-lg text-sm transition-colors mt-2">
                         Generate API Key
                     </button>
                 </form>
 
                 <div id="newAgentResult" class="hidden mt-4 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
-                    <p class="text-xs text-emerald-400 font-semibold mb-2">Agent Created. Copy this key now.</p>
+                    <p class="text-xs text-emerald-400 font-semibold mb-2">Agent created. Copy this key now; it won't be shown again.</p>
                     <div id="newApiKey" class="bg-slate-900 p-2 rounded text-xs font-mono text-emerald-300 break-all border border-slate-700"></div>
+                    <button id="copyKeyBtn" type="button" class="mt-2 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700">Copy key</button>
                 </div>
             </div>
 
@@ -90,29 +107,27 @@
                         <h2 class="text-lg font-semibold text-white mb-1">Your agents</h2>
                         <p class="text-xs text-slate-400">Monitor allocated budgets and control authority.</p>
                     </div>
-                    <button onclick="fetchData()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700">Refresh</button>
+                    <button id="refreshBtn" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700">Refresh</button>
                 </div>
-                
-                <div id="agentList" class="space-y-4 overflow-y-auto max-h-[400px] pr-2">
-                    <!-- Agent cards get injected here -->
-                </div>
+
+                <div id="agentList" class="space-y-4 overflow-y-auto max-h-[400px] pr-2"></div>
             </div>
         </div>
 
         <!-- Ledger (Collapsible) -->
         <div class="bg-slate-850 rounded-xl border border-slate-800 p-6">
-            <div class="flex justify-between items-center cursor-pointer" onclick="toggleLedger()">
+            <div class="flex justify-between items-center cursor-pointer" id="ledgerToggle">
                 <div>
                     <h2 class="text-lg font-semibold text-white mb-1 flex items-center gap-2">
                         Transaction ledger
                         <svg class="w-4 h-4 text-slate-500 transition-transform duration-200" id="ledgerChevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
                     </h2>
-                    <p class="text-xs text-slate-400">Click to expand or hide authorization attempts.</p>
+                    <p class="text-xs text-slate-400">Latest 10 authorization attempts. Click to expand or hide.</p>
                 </div>
-                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-900 px-2 py-1 rounded border border-slate-800">Live Database Records</div>
+                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-900 px-2 py-1 rounded border border-slate-800">Audit trail</div>
             </div>
-            
-            <div id="ledgerContainer" class="hidden mt-6">
+
+            <div id="ledgerContainer" class="hidden mt-6 overflow-x-auto">
                 <table class="w-full text-sm text-left">
                     <thead class="text-xs text-slate-500 uppercase bg-slate-900/50">
                         <tr>
@@ -121,7 +136,7 @@
                             <th class="px-4 py-3 font-medium">Category</th>
                             <th class="px-4 py-3 font-medium">Decision</th>
                             <th class="px-4 py-3 font-medium">Reason</th>
-                            <th class="px-4 py-3 font-medium rounded-tr-lg">Timestamp</th>
+                            <th class="px-4 py-3 font-medium rounded-tr-lg">Time</th>
                         </tr>
                     </thead>
                     <tbody id="ledgerBody" class="divide-y divide-slate-800/50">
@@ -134,138 +149,277 @@
     </div>
 
     <script>
-        // Toggle Ledger visibility
+        // ------------------------------------------------------------------
+        // Auth + helpers
+        // ------------------------------------------------------------------
+        function getToken() {
+            let t = sessionStorage.getItem('aci_admin_token');
+            if (!t) {
+                t = prompt('Enter Admin Token');
+                if (t) sessionStorage.setItem('aci_admin_token', t.trim());
+            }
+            return t ? t.trim() : '';
+        }
+
+        async function adminFetch(url, opts = {}) {
+            const res = await fetch(url, {
+                ...opts,
+                headers: { ...(opts.headers || {}), 'X-Admin-Token': getToken() },
+            });
+            if (res.status === 401) {
+                sessionStorage.removeItem('aci_admin_token');
+                toast('Invalid admin token. Refresh the page to re-enter it.', true);
+            }
+            return res;
+        }
+
+        // Escape anything that came from the server or a user before putting it in innerHTML
+        function esc(v) {
+            return String(v ?? '').replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+
+        const gbp = n => `£${Number(n || 0).toFixed(2)}`;
+
+        function timeAgo(ts) {
+            if (!ts) return '';
+            const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(ts) ? ts : ts + 'Z');
+            const s = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
+            if (s < 60) return 'Just now';
+            if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+            if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+            return d.toLocaleDateString('en-GB');
+        }
+
+        let toastTimer;
+        function toast(msg, isError = false) {
+            const el = document.getElementById('toast');
+            el.textContent = msg;
+            el.className = `fixed bottom-6 right-6 max-w-sm bg-slate-850 border ${isError ? 'border-rose-500/40' : 'border-slate-700'} text-sm text-white px-4 py-3 rounded-lg shadow-xl z-50`;
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => el.classList.add('hidden'), 4500);
+        }
+
+        const decisionStyle = d => ({
+            ALLOW:  'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+            REVIEW: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+            ERROR:  'bg-slate-500/10 text-slate-300 border-slate-500/20',
+        }[d] || 'bg-rose-500/10 text-rose-400 border-rose-500/20');
+
+        // ------------------------------------------------------------------
+        // UI
+        // ------------------------------------------------------------------
         function toggleLedger() {
-            const container = document.getElementById("ledgerContainer");
-            const chevron = document.getElementById("ledgerChevron");
-            container.classList.toggle("hidden");
-            chevron.classList.toggle("rotate-180");
+            document.getElementById('ledgerContainer').classList.toggle('hidden');
+            document.getElementById('ledgerChevron').classList.toggle('rotate-180');
+        }
+
+        async function checkHealth() {
+            const el = document.getElementById('apiStatus');
+            try {
+                const r = await fetch('/health');
+                if (!r.ok) throw new Error();
+                el.className = 'flex items-center gap-2 text-xs font-medium text-emerald-400 bg-emerald-400/10 px-3 py-1.5 rounded-full border border-emerald-400/20';
+                el.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> API Connected';
+            } catch {
+                el.className = 'flex items-center gap-2 text-xs font-medium text-rose-400 bg-rose-400/10 px-3 py-1.5 rounded-full border border-rose-400/20';
+                el.innerHTML = '<span class="w-2 h-2 rounded-full bg-rose-400"></span> API Unreachable';
+            }
         }
 
         async function fetchData() {
-            // Fetch Agents
-            const agentsRes = await fetch(`/api/agents`);
-            const agents = await agentsRes.json();
-            const list = document.getElementById("agentList");
-            
-            // Update Stats
-            document.getElementById("statAgents").innerText = agents.length;
-            const totalBudget = agents.reduce((acc, curr) => acc + curr.monthly_limit, 0);
-            document.getElementById("statBudget").innerText = `£${totalBudget.toFixed(2)}`;
+            checkHealth();
+            const [agentsRes, ledgerRes, reviewsRes] = await Promise.all([
+                adminFetch('/api/agents'),
+                adminFetch('/api/ledger'),
+                adminFetch('/api/reviews'),
+            ]);
+            if (!agentsRes.ok || !ledgerRes.ok || !reviewsRes.ok) return; // e.g. 401: toast already shown
+
+            renderAgents(await agentsRes.json());
+            renderLedger(await ledgerRes.json());
+            renderReviews(await reviewsRes.json());
+        }
+
+        function renderAgents(agents) {
+            const list = document.getElementById('agentList');
+            document.getElementById('statAgents').innerText = agents.length;
+            document.getElementById('statBudget').innerText = gbp(agents.reduce((acc, a) => acc + a.monthly_limit, 0));
 
             if (agents.length === 0) {
                 list.innerHTML = `<div class="text-center py-10 border border-dashed border-slate-700 rounded-xl"><p class="text-slate-500 text-sm">No agents yet</p></div>`;
-            } else {
-                list.innerHTML = agents.map(a => {
-                    const spentPct = Math.min((a.spend_this_month / a.monthly_limit) * 100, 100);
-                    const isFrozen = a.is_frozen;
-                    return `
-                    <div class="bg-slate-900 border border-slate-700 p-4 rounded-xl">
-                        <div class="flex justify-between items-start mb-2">
-                            <div>
-                                <h3 class="font-semibold text-white text-sm">${a.name}</h3>
-                                <span class="text-[10px] text-slate-500 font-mono">${a.id}</span>
-                            </div>
-                            <span class="text-[10px] font-bold px-2 py-1 rounded-full ${isFrozen ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}">
-                                ${isFrozen ? 'FROZEN' : 'ACTIVE'}
-                            </span>
-                        </div>
-                        
-                        <div class="space-y-1 mb-4">
-                            <div class="flex justify-between text-xs">
-                                <span class="text-slate-400">Spent</span>
-                                <span class="text-white font-medium">£${a.spend_this_month.toFixed(2)} <span class="text-slate-500">/ £${a.monthly_limit.toFixed(2)}</span></span>
-                            </div>
-                            <div class="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                                <div class="h-full ${spentPct > 90 ? 'bg-rose-500' : 'bg-blue-500'}" style="width: ${spentPct}%"></div>
-                            </div>
-                        </div>
+                return;
+            }
 
-                        <div class="grid grid-cols-3 gap-2 mt-4 pt-4 border-t border-slate-800">
-                            <button onclick="runTest('${a.id}')" class="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-xs py-1.5 rounded transition-colors">Run £85 Test</button>
-                            <button onclick="toggleFreeze('${a.id}')" class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs py-1.5 rounded transition-colors">${isFrozen ? 'Unfreeze' : 'Freeze'}</button>
-                            <button onclick="deleteAgent('${a.id}')" class="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs py-1.5 rounded transition-colors">Delete</button>
+            list.innerHTML = agents.map(a => {
+                const spentPct = a.monthly_limit > 0 ? Math.min((a.spend_this_month / a.monthly_limit) * 100, 100) : 0;
+                const frozen = a.is_frozen;
+                return `
+                <div class="bg-slate-900 border border-slate-700 p-4 rounded-xl">
+                    <div class="flex justify-between items-start mb-2">
+                        <div>
+                            <h3 class="font-semibold text-white text-sm">${esc(a.name)}</h3>
+                            <span class="text-[10px] text-slate-500 font-mono">${esc(a.id)}</span>
+                        </div>
+                        <span class="text-[10px] font-bold px-2 py-1 rounded-full ${frozen ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}">
+                            ${frozen ? 'FROZEN' : 'ACTIVE'}
+                        </span>
+                    </div>
+
+                    <div class="space-y-1 mb-4">
+                        <div class="flex justify-between text-xs">
+                            <span class="text-slate-400">Spent this month</span>
+                            <span class="text-white font-medium">${gbp(a.spend_this_month)} <span class="text-slate-500">/ ${gbp(a.monthly_limit)}</span></span>
+                        </div>
+                        <div class="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                            <div class="h-full ${spentPct > 90 ? 'bg-rose-500' : 'bg-blue-500'}" style="width: ${spentPct}%"></div>
                         </div>
                     </div>
-                `}).join('');
-            }
 
-            // Fetch Ledger
-            const ledgerRes = await fetch(`/api/ledger`);
-            const ledger = await ledgerRes.json();
-            const tbody = document.getElementById("ledgerBody");
-            
-            document.getElementById("statDecisions").innerText = ledger.length;
+                    <div class="grid grid-cols-3 gap-2 mt-4 pt-4 border-t border-slate-800">
+                        <button data-action="test" data-id="${esc(a.id)}" class="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-xs py-1.5 rounded transition-colors">Dry-run £85</button>
+                        <button data-action="freeze" data-id="${esc(a.id)}" class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs py-1.5 rounded transition-colors">${frozen ? 'Unfreeze' : 'Freeze'}</button>
+                        <button data-action="delete" data-id="${esc(a.id)}" class="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs py-1.5 rounded transition-colors">Delete</button>
+                    </div>
+                </div>`;
+            }).join('');
 
-            if (ledger.length > 0) {
-                tbody.innerHTML = ledger.map(l => `
-                    <tr class="hover:bg-slate-800/50 transition-colors">
-                        <td class="px-4 py-3 text-white font-medium">£${l.amount.toFixed(2)}</td>
-                        <td class="px-4 py-3">${l.merchant}</td>
-                        <td class="px-4 py-3 text-slate-500">${l.category}</td>
-                        <td class="px-4 py-3">
-                            <span class="text-[10px] font-bold px-2 py-1 rounded-full border ${l.decision === 'ALLOW' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}">
-                                ${l.decision}
-                            </span>
-                        </td>
-                        <td class="px-4 py-3 text-xs text-slate-400">${l.reason.replace(/_/g, ' ')}</td>
-                        <td class="px-4 py-3 text-xs text-slate-500">Just now</td>
-                    </tr>
-                `).join('');
-            } else {
-                tbody.innerHTML = `<tr><td colspan="6" class="text-center py-6 text-slate-500">No authorization requests recorded yet.</td></tr>`;
-            }
+            // Keep agents in memory so the dry-run uses each agent's own merchant/category
+            window.__agents = Object.fromEntries(agents.map(a => [a.id, a]));
         }
 
-        async function runTest(id) {
-            await fetch(`/api/agents/${id}/test`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ amount: 85.00, merchant: "amazon.co.uk", category: "toner" })
-            });
-            fetchData();
-            // Auto-open ledger if it's hidden so user sees the result
-            if(document.getElementById("ledgerContainer").classList.contains("hidden")) {
-                toggleLedger();
+        function renderLedger(ledger) {
+            const tbody = document.getElementById('ledgerBody');
+            if (ledger.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="6" class="text-center py-6 text-slate-500">No authorization requests recorded yet.</td></tr>`;
+                return;
             }
+            tbody.innerHTML = ledger.map(l => `
+                <tr class="hover:bg-slate-800/50 transition-colors">
+                    <td class="px-4 py-3 text-white font-medium">${gbp(l.amount)}</td>
+                    <td class="px-4 py-3">${esc(l.merchant)}</td>
+                    <td class="px-4 py-3 text-slate-500">${esc(l.category)}</td>
+                    <td class="px-4 py-3">
+                        <span class="text-[10px] font-bold px-2 py-1 rounded-full border ${decisionStyle(l.decision)}">${esc(l.decision)}</span>
+                    </td>
+                    <td class="px-4 py-3 text-xs text-slate-400">${esc(String(l.reason || '').replace(/_/g, ' '))}</td>
+                    <td class="px-4 py-3 text-xs text-slate-500">${esc(timeAgo(l.created_at))}</td>
+                </tr>`).join('');
+        }
+
+        function renderReviews(reviews) {
+            document.getElementById('statPending').innerText = reviews.length;
+            const panel = document.getElementById('reviewsPanel');
+            const list = document.getElementById('reviewList');
+            panel.classList.toggle('hidden', reviews.length === 0);
+            list.innerHTML = reviews.map(r => `
+                <div class="bg-slate-900 border border-slate-700 rounded-lg p-3 flex flex-wrap items-center justify-between gap-3">
+                    <div class="text-sm">
+                        <span class="text-white font-semibold">${gbp(r.amount)}</span>
+                        <span class="text-slate-400"> at ${esc(r.merchant)} · ${esc(r.category)}</span>
+                        <div class="text-[10px] text-slate-500 font-mono mt-0.5">${esc(r.id)} · ${esc(r.agent_id)} · ${esc(timeAgo(r.created_at))}</div>
+                    </div>
+                    <div class="flex gap-2">
+                        <button data-action="approve" data-id="${esc(r.id)}" class="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-xs px-3 py-1.5 rounded">Approve</button>
+                        <button data-action="reject" data-id="${esc(r.id)}" class="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs px-3 py-1.5 rounded">Reject</button>
+                    </div>
+                </div>`).join('');
+        }
+
+        // ------------------------------------------------------------------
+        // Actions
+        // ------------------------------------------------------------------
+        async function runTest(id) {
+            const a = (window.__agents || {})[id];
+            if (!a || !a.allowed_merchants?.length || !a.allowed_categories?.length) {
+                toast('This agent has no allowed merchants/categories to test with.', true);
+                return;
+            }
+            const res = await adminFetch(`/api/agents/${encodeURIComponent(id)}/test`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ amount: 85.0, merchant: a.allowed_merchants[0], category: a.allowed_categories[0] }),
+            });
+            if (!res.ok) { toast('Dry-run failed.', true); return; }
+            const d = await res.json();
+            toast(`Dry run: ${d.decision} (${String(d.reason).replace(/_/g, ' ')}). No budget used, no card issued.`);
         }
 
         async function toggleFreeze(id) {
-            await fetch(`/api/agents/${id}/freeze`, { method: "POST" });
+            await adminFetch(`/api/agents/${encodeURIComponent(id)}/freeze`, { method: 'POST' });
             fetchData();
         }
 
         async function deleteAgent(id) {
-            if(confirm("Delete this agent?")) {
-                await fetch(`/api/agents/${id}`, { method: "DELETE" });
-                fetchData();
-            }
+            if (!confirm('Delete this agent? Its audit history is kept.')) return;
+            await adminFetch(`/api/agents/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            fetchData();
         }
 
-        document.getElementById("agentForm").addEventListener("submit", async (e) => {
+        async function decideReview(id, verb) {
+            const res = await adminFetch(`/api/reviews/${encodeURIComponent(id)}/${verb}`, { method: 'POST' });
+            if (res.ok) toast(`Purchase ${verb === 'approve' ? 'approved. The agent can now claim its card.' : 'rejected.'}`);
+            else if (res.status === 409) toast('Already decided.', true);
+            fetchData();
+        }
+
+        // One delegated listener for every button rendered via innerHTML
+        document.addEventListener('click', e => {
+            const btn = e.target.closest('button[data-action]');
+            if (!btn) return;
+            const { action, id } = btn.dataset;
+            if (action === 'test') runTest(id);
+            else if (action === 'freeze') toggleFreeze(id);
+            else if (action === 'delete') deleteAgent(id);
+            else if (action === 'approve' || action === 'reject') decideReview(id, action);
+        });
+
+        document.getElementById('ledgerToggle').addEventListener('click', toggleLedger);
+        document.getElementById('refreshBtn').addEventListener('click', fetchData);
+
+        document.getElementById('copyKeyBtn').addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(document.getElementById('newApiKey').innerText);
+                toast('API key copied.');
+            } catch { toast('Copy failed. Select and copy it manually.', true); }
+        });
+
+        document.getElementById('agentForm').addEventListener('submit', async (e) => {
             e.preventDefault();
+            const split = id => document.getElementById(id).value.split(',').map(s => s.trim()).filter(Boolean);
             const payload = {
-                name: document.getElementById("name").value,
-                max_transaction: parseFloat(document.getElementById("max_tx").value),
-                monthly_limit: parseFloat(document.getElementById("monthly_limit").value),
-                allowed_merchants: document.getElementById("merchants").value.split(',').map(s => s.trim()),
-                allowed_categories: document.getElementById("categories").value.split(',').map(s => s.trim()),
-                require_approval_over: parseFloat(document.getElementById("approval").value)
+                name: document.getElementById('name').value.trim(),
+                max_transaction: parseFloat(document.getElementById('max_tx').value),
+                monthly_limit: parseFloat(document.getElementById('monthly_limit').value),
+                allowed_merchants: split('merchants'),
+                allowed_categories: split('categories'),
+                require_approval_over: parseFloat(document.getElementById('approval').value),
             };
 
-            const res = await fetch(`/api/agents`, {
-                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+            if (!payload.allowed_merchants.length || !payload.allowed_categories.length) {
+                toast('Add at least one merchant and one category.', true);
+                return;
+            }
+
+            const res = await adminFetch('/api/agents', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
             });
 
             if (res.ok) {
                 const data = await res.json();
-                document.getElementById("newAgentResult").classList.remove("hidden");
-                document.getElementById("newApiKey").innerText = data.api_key;
+                document.getElementById('newAgentResult').classList.remove('hidden');
+                document.getElementById('newApiKey').innerText = data.api_key;
                 fetchData();
+            } else if (res.status !== 401) {
+                toast('Could not create agent. Check the values and try again.', true);
             }
         });
 
         fetchData();
+        setInterval(fetchData, 15000); // keep pending approvals fresh during a demo
     </script>
 </body>
 </html>
