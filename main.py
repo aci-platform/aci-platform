@@ -1,18 +1,22 @@
 import os
+import re
 import uuid
+import time
 import secrets
 import hashlib
 import logging
+import threading
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone, date
+from collections import defaultdict, deque
+from datetime import datetime, timezone, date, timedelta
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Header, Depends, Response
+from fastapi import FastAPI, HTTPException, Header, Depends, Response, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import (
     create_engine, Column, String, Float, Boolean, JSON, DateTime,
-    inspect, text, update, or_,
+    inspect, text, update, or_, func,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
@@ -29,6 +33,24 @@ if not ADMIN_TOKEN:
 
 ISSUER_NAME = os.getenv("ISSUER", "mock")
 CARD_CURRENCY = "GBP"
+IP_SALT = os.getenv("IP_SALT", "aci-default-salt")
+
+# Rate limits and caps (read at request time, so tests can change them)
+REQUESTS_PER_MINUTE = int(os.getenv("REQUESTS_PER_MINUTE", "60"))      # per agent key
+ADMIN_FAILS_PER_MINUTE = int(os.getenv("ADMIN_FAILS_PER_MINUTE", "10"))  # failed admin attempts per IP
+SIGNUP_PER_IP_PER_HOUR = int(os.getenv("SIGNUP_PER_IP_PER_HOUR", "3"))
+SIGNUP_DAILY_CAP = int(os.getenv("SIGNUP_DAILY_CAP", "50"))
+
+# Fixed, safe mandate for every self-serve sandbox agent
+SANDBOX_MANDATE = {
+    "max_transaction": 100.0,
+    "monthly_limit": 500.0,
+    "allowed_merchants": ["amazon.co.uk", "viking-direct.co.uk"],
+    "allowed_categories": ["toner", "office_supplies", "software"],
+    "require_approval_over": 50.0,
+}
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # ---------------------------------------------------------------------------
 # Database
@@ -41,6 +63,10 @@ Base = declarative_base()
 
 def hash_key(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
+
+
+def hash_ip(ip: str) -> str:
+    return hashlib.sha256((IP_SALT + ip).encode()).hexdigest()[:32]
 
 
 def utcnow():
@@ -63,12 +89,12 @@ class Agent(Base):
     max_transaction = Column(Float)
     monthly_limit = Column(Float)
     spend_this_month = Column(Float, default=0.0)
-    period = Column(String, nullable=True)  # "YYYY-MM"; spend resets when the month rolls over
+    period = Column(String, nullable=True)
     allowed_merchants = Column(JSON)
     allowed_categories = Column(JSON)
     require_approval_over = Column(Float)
     is_frozen = Column(Boolean, default=False)
-    deleted_at = Column(DateTime, nullable=True)  # soft delete: ledger history is kept
+    deleted_at = Column(DateTime, nullable=True)
 
 
 class Ledger(Base):
@@ -80,10 +106,20 @@ class Ledger(Base):
     category = Column(String)
     decision = Column(String)
     reason = Column(String)
-    issuer_card_id = Column(String, nullable=True)  # audit link only, never card numbers
-    review_status = Column(String, nullable=True)   # PENDING / APPROVED / REJECTED / CLAIMED
+    issuer_card_id = Column(String, nullable=True)
+    review_status = Column(String, nullable=True)
     idempotency_key = Column(String, nullable=True)
     created_at = Column(DateTime, default=utcnow)
+
+
+class Signup(Base):
+    __tablename__ = "signups"
+    id = Column(String, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True)
+    agent_id = Column(String, index=True)
+    ip_hash = Column(String)          # hashed, never the raw IP
+    consent_at = Column(DateTime)
+    created_at = Column(DateTime, default=utcnow, index=True)
 
 
 Base.metadata.create_all(bind=engine)
@@ -117,6 +153,46 @@ def ensure_schema():
 ensure_schema()
 
 # ---------------------------------------------------------------------------
+# Rate limiting (in memory: fine for a single server process)
+# ---------------------------------------------------------------------------
+_rl_lock = threading.Lock()
+_rl_hits = defaultdict(deque)
+
+
+def rate_limit(key: str, limit: int, window_seconds: int) -> bool:
+    """Records a hit. Returns False when the key is over its limit for the window."""
+    now = time.monotonic()
+    with _rl_lock:
+        q = _rl_hits[key]
+        while q and now - q[0] > window_seconds:
+            q.popleft()
+        if len(q) >= limit:
+            return False
+        q.append(now)
+        return True
+
+
+def enforce_rate_limit(key: str, limit: int, window_seconds: int, message: str = "Rate limit exceeded"):
+    if not rate_limit(key, limit, window_seconds):
+        raise HTTPException(
+            status_code=429, detail=message,
+            headers={"Retry-After": str(window_seconds)},
+        )
+
+
+def client_ip(request: Request) -> str:
+    # Render sits behind Cloudflare. These headers can be spoofed, so the per-IP limit is
+    # a speed bump; the daily signup cap is the real backstop.
+    ip = request.headers.get("cf-connecting-ip")
+    if not ip:
+        fwd = request.headers.get("x-forwarded-for")
+        ip = fwd.split(",")[0].strip() if fwd else None
+    if not ip and request.client:
+        ip = request.client.host
+    return ip or "unknown"
+
+
+# ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
 
@@ -136,6 +212,11 @@ class AuthRequest(BaseModel):
     category: str = Field(min_length=1, max_length=100)
 
 
+class SignupRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    consent: bool
+
+
 # ---------------------------------------------------------------------------
 # App + dependencies
 # ---------------------------------------------------------------------------
@@ -150,8 +231,11 @@ def get_db():
         db.close()
 
 
-def require_admin(x_admin_token: str = Header(None)):
+def require_admin(request: Request, x_admin_token: str = Header(None)):
     if not secrets.compare_digest(x_admin_token or "", ADMIN_TOKEN):
+        # Only failures count, so brute-forcing the token gets throttled.
+        enforce_rate_limit(f"adminfail:{client_ip(request)}", ADMIN_FAILS_PER_MINUTE, 60,
+                           "Too many failed attempts")
         raise HTTPException(status_code=401, detail="Admin token required")
 
 
@@ -184,6 +268,7 @@ def get_agent(authorization: str = Header(None), db: Session = Depends(get_db)) 
     )
     if not agent:
         raise HTTPException(status_code=401, detail="Invalid API Key")
+    enforce_rate_limit(f"agent:{agent.id}", REQUESTS_PER_MINUTE, 60, "Rate limit exceeded for this key")
     roll_period(db, agent)
     return agent
 
@@ -193,6 +278,21 @@ def get_active_agent(db: Session, agent_id: str) -> Agent:
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     return agent
+
+
+def new_agent_record(*, name, max_transaction, monthly_limit, merchants, categories, approval_over):
+    """Builds an Agent plus its raw API key (the raw key is only ever returned once)."""
+    agent_id = f"agent_{uuid.uuid4().hex[:8]}"
+    raw_api_key = f"aci_test_{secrets.token_urlsafe(24)}"
+    agent = Agent(
+        id=agent_id, name=name.strip(), api_key_hash=hash_key(raw_api_key),
+        max_transaction=max_transaction, monthly_limit=monthly_limit,
+        spend_this_month=0.0, period=current_period(),
+        allowed_merchants=[norm(m) for m in merchants],
+        allowed_categories=[norm(c) for c in categories],
+        require_approval_over=approval_over,
+    )
+    return agent, raw_api_key
 
 
 # ---------------------------------------------------------------------------
@@ -349,25 +449,72 @@ def health():
 
 
 # ---------------------------------------------------------------------------
+# Public: self-serve sandbox signup
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/signup", status_code=201)
+def signup(body: SignupRequest, request: Request, response: Response, db: Session = Depends(get_db)):
+    """Gives a developer their own sandbox agent and API key. No admin access involved."""
+    response.headers["Cache-Control"] = "no-store"  # the response contains an API key
+
+    if not body.consent:
+        raise HTTPException(status_code=400, detail="Consent is required to create a sandbox key")
+    email = body.email.strip().lower()
+    if not EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="Please enter a valid email address")
+
+    ip_h = hash_ip(client_ip(request))
+    enforce_rate_limit(f"signup:{ip_h}", SIGNUP_PER_IP_PER_HOUR, 3600,
+                       "Too many signups from this address. Try again later.")
+
+    day_start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_count = db.query(func.count(Signup.id)).filter(Signup.created_at >= day_start).scalar() or 0
+    if today_count >= SIGNUP_DAILY_CAP:
+        raise HTTPException(status_code=429, detail="Sandbox signups are full for today. Please try again tomorrow.")
+
+    if db.query(Signup).filter(Signup.email == email).first():
+        raise HTTPException(
+            status_code=409,
+            detail="This email already has a sandbox key. Keys are shown only once, so contact us for a new one.",
+        )
+
+    agent, raw_key = new_agent_record(
+        name=f"Sandbox ({email.split('@')[0][:40]})",
+        max_transaction=SANDBOX_MANDATE["max_transaction"],
+        monthly_limit=SANDBOX_MANDATE["monthly_limit"],
+        merchants=SANDBOX_MANDATE["allowed_merchants"],
+        categories=SANDBOX_MANDATE["allowed_categories"],
+        approval_over=SANDBOX_MANDATE["require_approval_over"],
+    )
+    now = utcnow()
+    db.add(agent)
+    db.add(Signup(id=f"su_{uuid.uuid4().hex[:10]}", email=email, agent_id=agent.id,
+                  ip_hash=ip_h, consent_at=now, created_at=now))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="This email already has a sandbox key.")
+
+    return {"agent_id": agent.id, "api_key": raw_key, "mandate": SANDBOX_MANDATE}
+
+
+# ---------------------------------------------------------------------------
 # Admin / dashboard routes
 # ---------------------------------------------------------------------------
 
 
 @app.post("/api/agents", status_code=201, dependencies=[Depends(require_admin)])
 def create_agent(agent: AgentCreate, db: Session = Depends(get_db)):
-    agent_id = f"agent_{uuid.uuid4().hex[:8]}"
-    raw_api_key = f"aci_test_{secrets.token_urlsafe(24)}"
-    db_agent = Agent(
-        id=agent_id, name=agent.name.strip(), api_key_hash=hash_key(raw_api_key),
-        max_transaction=agent.max_transaction, monthly_limit=agent.monthly_limit,
-        spend_this_month=0.0, period=current_period(),
-        allowed_merchants=[norm(m) for m in agent.allowed_merchants],
-        allowed_categories=[norm(c) for c in agent.allowed_categories],
-        require_approval_over=agent.require_approval_over,
+    db_agent, raw_api_key = new_agent_record(
+        name=agent.name, max_transaction=agent.max_transaction, monthly_limit=agent.monthly_limit,
+        merchants=agent.allowed_merchants, categories=agent.allowed_categories,
+        approval_over=agent.require_approval_over,
     )
     db.add(db_agent)
     db.commit()
-    return {"agent_id": agent_id, "api_key": raw_api_key}
+    return {"agent_id": db_agent.id, "api_key": raw_api_key}
 
 
 @app.get("/api/agents", dependencies=[Depends(require_admin)])
@@ -397,6 +544,33 @@ def delete_agent(agent_id: str, db: Session = Depends(get_db)):
 @app.get("/api/ledger", dependencies=[Depends(require_admin)])
 def get_ledger(db: Session = Depends(get_db)):
     return db.query(Ledger).order_by(Ledger.created_at.desc()).limit(10).all()
+
+
+@app.get("/api/usage", dependencies=[Depends(require_admin)])
+def usage(db: Session = Depends(get_db)):
+    """Traction numbers for self-serve signups. Emails are not returned."""
+    total = db.query(func.count(Signup.id)).scalar() or 0
+    last_24h = (
+        db.query(func.count(Signup.id))
+        .filter(Signup.created_at >= utcnow() - timedelta(hours=24))
+        .scalar() or 0
+    )
+    rows = (
+        db.query(
+            Signup.agent_id,
+            func.count(Ledger.id),
+            func.count(func.distinct(func.date(Ledger.created_at))),
+        )
+        .outerjoin(Ledger, Ledger.agent_id == Signup.agent_id)
+        .group_by(Signup.agent_id)
+        .all()
+    )
+    return {
+        "signups_total": total,
+        "signups_last_24h": last_24h,
+        "made_at_least_one_request": sum(1 for r in rows if r[1] > 0),
+        "active_on_two_or_more_days": sum(1 for r in rows if r[2] >= 2),
+    }
 
 
 # --- Human review workflow (admin side) ---

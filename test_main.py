@@ -49,10 +49,25 @@ def luhn_valid(number: str) -> bool:
     return total % 10 == 0
 
 
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    main._rl_hits.clear()
+    yield
+    main._rl_hits.clear()
+
+
 @pytest.fixture(scope="module")
 def client():
     with TestClient(main.app) as c:
         yield c
+
+
+_counter = {"n": 0}
+
+
+def unique_email():
+    _counter["n"] += 1
+    return f"dev{_counter['n']}@example.com"
 
 
 def make_agent(client, *, max_tx=500, monthly=2000, approval_over=1000,
@@ -74,6 +89,14 @@ def authorize(client, headers, amount=30, merchant="amazon.co.uk", category="ton
     h = dict(headers, **(extra or {}))
     return client.post("/v1/authorize", headers=h,
                        json={"amount": amount, "merchant": merchant, "category": category})
+
+
+def do_signup(client, email=None, consent=True, ip="1.2.3.4"):
+    return client.post(
+        "/api/signup",
+        headers={"cf-connecting-ip": ip},
+        json={"email": email or unique_email(), "consent": consent},
+    )
 
 
 # ---------------------------------------------------------------- basics
@@ -184,3 +207,94 @@ def test_rejected_review_cannot_be_claimed(client):
     dec_id = authorize(client, h, amount=60).json()["evidence_id"]
     assert client.post(f"/api/reviews/{dec_id}/reject", headers=ADMIN).status_code == 200
     assert client.post(f"/v1/reviews/{dec_id}/claim", headers=h).status_code == 403
+
+
+# ------------------------------------------------------------ signup
+
+def test_signup_requires_consent(client):
+    r = do_signup(client, consent=False)
+    assert r.status_code == 400
+
+
+def test_signup_rejects_invalid_email(client):
+    r = do_signup(client, email="not-an-email")
+    assert r.status_code == 400
+
+
+def test_signup_returns_working_sandbox_key_with_fixed_mandate(client):
+    r = do_signup(client)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["api_key"].startswith("aci_test_")
+    h = {"Authorization": f"Bearer {body['api_key']}"}
+
+    ok = authorize(client, h, amount=10, merchant="amazon.co.uk", category="toner").json()
+    assert ok["decision"] == "ALLOW"
+
+    over = authorize(client, h, amount=150, merchant="amazon.co.uk", category="toner").json()
+    assert over["decision"] == "DECLINE" and over["reason"] == "EXCEEDS_TRANSACTION_LIMIT"
+
+    review = authorize(client, h, amount=60, merchant="amazon.co.uk", category="toner").json()
+    assert review["decision"] == "REVIEW"
+
+
+def test_signup_duplicate_email_rejected(client):
+    email = unique_email()
+    assert do_signup(client, email=email, ip="2.2.2.2").status_code == 201
+    assert do_signup(client, email=email, ip="3.3.3.3").status_code == 409
+    assert do_signup(client, email=email.upper(), ip="4.4.4.4").status_code == 409
+
+
+def test_signup_per_ip_rate_limit(client, monkeypatch):
+    monkeypatch.setattr(main, "SIGNUP_PER_IP_PER_HOUR", 3)
+    for _ in range(3):
+        assert do_signup(client, ip="9.9.9.9").status_code == 201
+    assert do_signup(client, ip="9.9.9.9").status_code == 429
+    # a different address is unaffected
+    assert do_signup(client, ip="8.8.8.8").status_code == 201
+
+
+def test_signup_daily_cap(client, monkeypatch):
+    total = client.get("/api/usage", headers=ADMIN).json()["signups_total"]
+    monkeypatch.setattr(main, "SIGNUP_DAILY_CAP", total)
+    r = do_signup(client, ip="7.7.7.7")
+    assert r.status_code == 429
+
+
+def test_signup_response_is_not_cacheable(client):
+    r = do_signup(client, ip="6.6.6.6")
+    assert r.headers.get("cache-control") == "no-store"
+
+
+# ------------------------------------------------------------ rate limits
+
+def test_agent_request_rate_limit(client, monkeypatch):
+    monkeypatch.setattr(main, "REQUESTS_PER_MINUTE", 3)
+    _, h = make_agent(client)
+    for _ in range(3):
+        assert authorize(client, h, amount=1).status_code == 200
+    assert authorize(client, h, amount=1).status_code == 429
+
+
+def test_repeated_wrong_admin_token_gets_throttled(client, monkeypatch):
+    monkeypatch.setattr(main, "ADMIN_FAILS_PER_MINUTE", 3)
+    bad = {"X-Admin-Token": "wrong"}
+    codes = [client.get("/api/agents", headers=bad).status_code for _ in range(4)]
+    assert codes == [401, 401, 401, 429]
+    # the right token is never blocked by the failure counter
+    assert client.get("/api/agents", headers=ADMIN).status_code == 200
+
+
+# ------------------------------------------------------------ usage
+
+def test_usage_requires_admin_and_counts(client):
+    assert client.get("/api/usage").status_code == 401
+    before = client.get("/api/usage", headers=ADMIN).json()
+    r = do_signup(client, ip="5.5.5.5")
+    h = {"Authorization": f"Bearer {r.json()['api_key']}"}
+    authorize(client, h, amount=5)
+    after = client.get("/api/usage", headers=ADMIN).json()
+    assert after["signups_total"] == before["signups_total"] + 1
+    assert after["made_at_least_one_request"] == before["made_at_least_one_request"] + 1
+    assert set(after) == {"signups_total", "signups_last_24h",
+                          "made_at_least_one_request", "active_on_two_or_more_days"}
