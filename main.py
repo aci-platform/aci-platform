@@ -36,9 +36,9 @@ CARD_CURRENCY = "GBP"
 IP_SALT = os.getenv("IP_SALT", "aci-default-salt")
 
 # Rate limits and caps (read at request time, so tests can change them)
-REQUESTS_PER_MINUTE = int(os.getenv("REQUESTS_PER_MINUTE", "60"))      # per agent key
+REQUESTS_PER_MINUTE = int(os.getenv("REQUESTS_PER_MINUTE", "60"))        # per agent key
 ADMIN_FAILS_PER_MINUTE = int(os.getenv("ADMIN_FAILS_PER_MINUTE", "10"))  # failed admin attempts per IP
-SIGNUP_PER_IP_PER_HOUR = int(os.getenv("SIGNUP_PER_IP_PER_HOUR", "3"))
+SIGNUP_PER_IP_PER_HOUR = int(os.getenv("SIGNUP_PER_IP_PER_HOUR", "3"))   # successful signups per IP
 SIGNUP_DAILY_CAP = int(os.getenv("SIGNUP_DAILY_CAP", "50"))
 
 # Fixed, safe mandate for every self-serve sandbox agent
@@ -53,10 +53,21 @@ SANDBOX_MANDATE = {
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # ---------------------------------------------------------------------------
-# Database
+# Database: Postgres when DATABASE_URL is set (Render), SQLite otherwise (local, tests)
 # ---------------------------------------------------------------------------
-SQLALCHEMY_DATABASE_URL = "sqlite:///./aci.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+if DATABASE_URL.startswith("postgres://"):  # Render's URL prefix; SQLAlchemy wants postgresql://
+    DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
+
+if DATABASE_URL:
+    SQLALCHEMY_DATABASE_URL = DATABASE_URL
+    engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
+    logger.info("Database: Postgres")
+else:
+    SQLALCHEMY_DATABASE_URL = "sqlite:///./aci.db"
+    engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+    logger.info("Database: SQLite (local file)")
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -126,14 +137,16 @@ Base.metadata.create_all(bind=engine)
 
 
 def ensure_schema():
-    """Stop-gap migration for the prototype. Replace with Alembic when you move to Postgres."""
+    """Stop-gap migration for the prototype. Works on SQLite and Postgres.
+    Replace with Alembic when the schema starts changing often."""
+    dt = "TIMESTAMP" if engine.dialect.name == "postgresql" else "DATETIME"
     wanted = {
-        "agents": {"period": "VARCHAR", "deleted_at": "DATETIME"},
+        "agents": {"period": "VARCHAR", "deleted_at": dt},
         "ledger": {
             "issuer_card_id": "VARCHAR",
             "review_status": "VARCHAR",
             "idempotency_key": "VARCHAR",
-            "created_at": "DATETIME",
+            "created_at": dt,
         },
     }
     insp = inspect(engine)
@@ -159,17 +172,35 @@ _rl_lock = threading.Lock()
 _rl_hits = defaultdict(deque)
 
 
+def _prune(q: deque, now: float, window_seconds: int) -> None:
+    while q and now - q[0] > window_seconds:
+        q.popleft()
+
+
 def rate_limit(key: str, limit: int, window_seconds: int) -> bool:
     """Records a hit. Returns False when the key is over its limit for the window."""
     now = time.monotonic()
     with _rl_lock:
         q = _rl_hits[key]
-        while q and now - q[0] > window_seconds:
-            q.popleft()
+        _prune(q, now, window_seconds)
         if len(q) >= limit:
             return False
         q.append(now)
         return True
+
+
+def rate_limit_exceeded(key: str, limit: int, window_seconds: int) -> bool:
+    """Checks the limit WITHOUT recording a hit."""
+    now = time.monotonic()
+    with _rl_lock:
+        q = _rl_hits[key]
+        _prune(q, now, window_seconds)
+        return len(q) >= limit
+
+
+def rate_limit_record(key: str) -> None:
+    with _rl_lock:
+        _rl_hits[key].append(time.monotonic())
 
 
 def enforce_rate_limit(key: str, limit: int, window_seconds: int, message: str = "Rate limit exceeded"):
@@ -464,9 +495,14 @@ def signup(body: SignupRequest, request: Request, response: Response, db: Sessio
     if not EMAIL_RE.match(email):
         raise HTTPException(status_code=400, detail="Please enter a valid email address")
 
+    # Only SUCCESSFUL signups count toward the per-IP allowance (recorded at the end).
     ip_h = hash_ip(client_ip(request))
-    enforce_rate_limit(f"signup:{ip_h}", SIGNUP_PER_IP_PER_HOUR, 3600,
-                       "Too many signups from this address. Try again later.")
+    ip_key = f"signup:{ip_h}"
+    if rate_limit_exceeded(ip_key, SIGNUP_PER_IP_PER_HOUR, 3600):
+        raise HTTPException(
+            status_code=429, detail="Too many signups from this address. Try again later.",
+            headers={"Retry-After": "3600"},
+        )
 
     day_start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     today_count = db.query(func.count(Signup.id)).filter(Signup.created_at >= day_start).scalar() or 0
@@ -497,6 +533,7 @@ def signup(body: SignupRequest, request: Request, response: Response, db: Sessio
         db.rollback()
         raise HTTPException(status_code=409, detail="This email already has a sandbox key.")
 
+    rate_limit_record(ip_key)
     return {"agent_id": agent.id, "api_key": raw_key, "mandate": SANDBOX_MANDATE}
 
 
