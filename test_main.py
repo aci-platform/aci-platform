@@ -13,6 +13,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 _tmp = tempfile.mkdtemp()
 os.makedirs(os.path.join(_tmp, "static"))  # main.py mounts ./static at import time
 os.environ["ADMIN_TOKEN"] = "test-admin-token"
+
 sys.path.insert(0, ROOT)
 
 _cwd = os.getcwd()
