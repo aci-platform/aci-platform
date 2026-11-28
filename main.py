@@ -546,6 +546,13 @@ def signup(body: SignupRequest, request: Request, response: Response, db: Sessio
 
 @app.post("/api/agents", status_code=201, dependencies=[Depends(require_admin)])
 def create_agent(agent: AgentCreate, db: Session = Depends(get_db)):
+    # Reject mandates that can never make sense, e.g. a typo like max_transaction=5150
+    # with monthly_limit=500.
+    if agent.max_transaction > agent.monthly_limit:
+        raise HTTPException(
+            status_code=422,
+            detail="max_transaction cannot be greater than monthly_limit",
+        )
     db_agent, raw_api_key = new_agent_record(
         name=agent.name, max_transaction=agent.max_transaction, monthly_limit=agent.monthly_limit,
         merchants=agent.allowed_merchants, categories=agent.allowed_categories,
