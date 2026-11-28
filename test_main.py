@@ -299,3 +299,34 @@ def test_usage_requires_admin_and_counts(client):
     assert after["made_at_least_one_request"] == before["made_at_least_one_request"] + 1
     assert set(after) == {"signups_total", "signups_last_24h",
                           "made_at_least_one_request", "active_on_two_or_more_days"}
+
+
+# ------------------------------------------------------------ mandate validation
+
+def test_create_agent_rejects_transaction_limit_above_monthly_limit(client):
+    r = client.post("/api/agents", headers=ADMIN, json={
+        "name": "typo-agent",
+        "max_transaction": 5150,
+        "monthly_limit": 500,
+        "allowed_merchants": ["amazon.co.uk"],
+        "allowed_categories": ["toner"],
+        "require_approval_over": 100,
+    })
+    assert r.status_code == 422
+    assert "monthly_limit" in r.text
+
+
+# ------------------------------------------------------------ ledger display filter
+
+def test_ledger_view_since_filters_the_display_only(client, monkeypatch):
+    _, h = make_agent(client)
+    assert authorize(client, h, amount=5).status_code == 200
+    assert len(client.get("/api/ledger", headers=ADMIN).json()) > 0
+
+    # a cutoff in the future hides everything from the display...
+    monkeypatch.setenv("LEDGER_VIEW_SINCE", "2999-01-01T00:00:00Z")
+    assert client.get("/api/ledger", headers=ADMIN).json() == []
+
+    # ...but nothing is deleted: an invalid value is ignored and the history is back
+    monkeypatch.setenv("LEDGER_VIEW_SINCE", "not a date")
+    assert len(client.get("/api/ledger", headers=ADMIN).json()) > 0

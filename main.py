@@ -86,6 +86,20 @@ def utcnow():
     return datetime.now(timezone.utc)
 
 
+def parse_view_since(value: Optional[str]) -> Optional[datetime]:
+    """Parse LEDGER_VIEW_SINCE into a naive UTC datetime, or None if unset or invalid."""
+    if not value or not value.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        logger.warning("Ignoring invalid LEDGER_VIEW_SINCE: %r", value)
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 def current_period() -> str:
     return utcnow().strftime("%Y-%m")
 
@@ -589,7 +603,22 @@ def delete_agent(agent_id: str, db: Session = Depends(get_db)):
 
 @app.get("/api/ledger", dependencies=[Depends(require_admin)])
 def get_ledger(db: Session = Depends(get_db)):
-    return db.query(Ledger).order_by(Ledger.created_at.desc()).limit(10).all()
+    """Latest 10 decisions. If LEDGER_VIEW_SINCE is set (an ISO time such as
+    2026-11-28T15:30:00Z), only entries from then on are shown. This is a display
+    filter for demos: nothing is deleted and /api/usage is unaffected."""
+    query = db.query(Ledger)
+    cutoff = parse_view_since(os.getenv("LEDGER_VIEW_SINCE"))
+    if cutoff is not None:
+        query = query.filter(Ledger.created_at >= cutoff)
+    return query.order_by(Ledger.created_at.desc()).limit(10).all()
+
+@app.delete("/api/ledger")
+def clear_ledger(db: Session = Depends(get_db), admin: str = Depends(require_admin)):
+    """Deletes all ledger entries. Requires admin token."""
+    db.query(Ledger).delete()
+    db.commit()
+    return {"status": "success", "message": "Ledger cleared"}
+
 
 
 @app.get("/api/usage", dependencies=[Depends(require_admin)])

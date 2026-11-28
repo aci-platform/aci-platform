@@ -124,7 +124,12 @@
                     </h2>
                     <p class="text-xs text-slate-400">Latest 10 authorization attempts. Click to expand or hide.</p>
                 </div>
-                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-900 px-2 py-1 rounded border border-slate-800">Audit trail</div>
+                <div class="flex items-center gap-3">
+                    <button onclick="clearLedger()" class="text-xs bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 px-3 py-1 rounded-lg transition-colors" onclick="event.stopPropagation();">
+                        Clear History
+                    </button>
+                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-900 px-2 py-1 rounded border border-slate-800">Audit trail</div>
+                </div>
             </div>
 
             <div id="ledgerContainer" class="hidden mt-6 overflow-x-auto">
@@ -173,7 +178,6 @@
             return res;
         }
 
-        // Escape anything that came from the server or a user before putting it in innerHTML
         function esc(v) {
             return String(v ?? '').replace(/[&<>"']/g, c => ({
                 '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -235,7 +239,7 @@
                 adminFetch('/api/ledger'),
                 adminFetch('/api/reviews'),
             ]);
-            if (!agentsRes.ok || !ledgerRes.ok || !reviewsRes.ok) return; // e.g. 401: toast already shown
+            if (!agentsRes.ok || !ledgerRes.ok || !reviewsRes.ok) return;
 
             renderAgents(await agentsRes.json());
             renderLedger(await ledgerRes.json());
@@ -285,7 +289,6 @@
                 </div>`;
             }).join('');
 
-            // Keep agents in memory so the dry-run uses each agent's own merchant/category
             window.__agents = Object.fromEntries(agents.map(a => [a.id, a]));
         }
 
@@ -357,6 +360,18 @@
             fetchData();
         }
 
+        async function clearLedger() {
+            if (!confirm('Are you sure you want to delete all transaction history? This cannot be undone.')) return;
+            
+            const res = await adminFetch('/api/ledger', { method: 'DELETE' });
+            if (res.ok) {
+                toast('Ledger history cleared.');
+                fetchData(); 
+            } else {
+                toast('Failed to clear ledger.', true);
+            }
+        }
+
         async function decideReview(id, verb) {
             const res = await adminFetch(`/api/reviews/${encodeURIComponent(id)}/${verb}`, { method: 'POST' });
             if (res.ok) toast(`Purchase ${verb === 'approve' ? 'approved. The agent can now claim its card.' : 'rejected.'}`);
@@ -364,7 +379,6 @@
             fetchData();
         }
 
-        // One delegated listener for every button rendered via innerHTML
         document.addEventListener('click', e => {
             const btn = e.target.closest('button[data-action]');
             if (!btn) return;
@@ -419,7 +433,7 @@
         });
 
         fetchData();
-        setInterval(fetchData, 15000); // keep pending approvals fresh during a demo
+        setInterval(fetchData, 15000);
     </script>
 </body>
 </html>
