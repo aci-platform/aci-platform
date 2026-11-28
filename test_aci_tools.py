@@ -21,6 +21,7 @@ class Fake:
         return self.decision
 
     def claim(self, evidence_id):
+        self.claimed = evidence_id
         if self.error:
             raise self.error
         return self.decision
@@ -97,3 +98,9 @@ def test_same_request_same_window_same_key_but_different_request_differs():
     k3 = aci_core.make_idempotency_key(86, "amazon.co.uk", "toner", now=990)
     k4 = aci_core.make_idempotency_key(85, "amazon.co.uk", "toner", now=1100)
     assert k1 == k2 and k1 != k3 and k1 != k4
+
+
+def test_claim_strips_stray_spaces_from_id():
+    fake = Fake(ALLOW)
+    aci_core.claim_approved_card("  dec_a553d82c ", client=fake)
+    assert fake.claimed == "dec_a553d82c"

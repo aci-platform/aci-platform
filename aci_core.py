@@ -69,6 +69,7 @@ def authorize_purchase(amount: float, merchant: str, category: str,
     if amount is None or amount <= 0:
         return "ERROR: amount must be greater than zero. Do NOT make this purchase."
     reveal = _reveal_default() if reveal_card is None else reveal_card
+    merchant, category = merchant.strip(), category.strip()
     key = make_idempotency_key(amount, merchant, category)
     try:
         d = (client or get_client()).authorize(
@@ -82,6 +83,7 @@ def claim_approved_card(decision_id: str, client: Optional[ACI] = None,
                         reveal_card: Optional[bool] = None) -> str:
     """After a human approves a REVIEW decision, fetch the single-use card."""
     reveal = _reveal_default() if reveal_card is None else reveal_card
+    decision_id = (decision_id or "").strip()  # pasted ids often carry stray spaces
     try:
         d = (client or get_client()).claim(decision_id)
     except ACIError as exc:
